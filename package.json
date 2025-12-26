@@ -1,0 +1,29 @@
+{
+  "name": "chain-reaction",
+  "version": "1.0.0",
+  "description": "yo",
+  "main": "index.js",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "vite"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xanax/chain-reaction.git"
+  },
+  "author": "ThreadPoole",
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/xanax/chain-reaction/issues"
+  },
+  "homepage": "https://github.com/xanax/chain-reaction#readme",
+  "devDependencies": {
+    "typescript": "^5.9.3",
+    "vite": "^7.3.0",
+    "vitest": "^4.0.16"
+  }
+}
