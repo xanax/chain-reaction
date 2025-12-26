@@ -56,7 +56,6 @@ body {
     font-family: 'Rajdhani', 'Segoe UI', sans-serif;
     min-height: 100vh;
     overflow: auto;
-    touch-action: none;
 }
 
 /* Animated background grid */
@@ -148,6 +147,8 @@ body::before {
     width: 100%;
     position: relative;
     padding: 20px;
+    touch-action: none;
+    overflow: hidden;
 }
 
 .game-frame {
@@ -176,6 +177,7 @@ body::before {
     display: block;
     border-radius: 13px;
     background: var(--bg-secondary);
+    touch-action: none;
 }
 
 /* Cursor indicator for gamepad */
@@ -266,6 +268,11 @@ body::before {
     align-items: center;
     z-index: 100;
     transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
 }
 
 .menu-overlay.hidden {
@@ -286,6 +293,7 @@ body::before {
     flex-direction: column;
     align-items: center;
     gap: 12px;
+    flex-shrink: 0;
 }
 
 .menu-body {
