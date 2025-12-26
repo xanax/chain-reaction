@@ -42,7 +42,10 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
-function playSound(type: 'place' | 'pop' | 'win' | 'join') {
+function playSound(
+  type: 'place' | 'pop' | 'win' | 'join' | 'timer-low',
+  opts?: { remaining?: number }
+) {
   const ctx = getAudioContext();
   if (ctx.state === 'suspended') ctx.resume();
   
@@ -70,13 +73,19 @@ function playSound(type: 'place' | 'pop' | 'win' | 'join') {
     osc.start(now);
     osc.stop(now + 0.12);
   } else if (type === 'pop') {
+    // Slight randomization for variety
+    const startFreq = 180 + Math.random() * 80; // 180-260
+    const endFreq = 50 + Math.random() * 20;    // 50-70
+    const duration = 0.18 + Math.random() * 0.08; // 0.18-0.26s
+    const startGain = 0.12 + Math.random() * 0.05;
+
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(200, now);
-    osc.frequency.exponentialRampToValueAtTime(60, now + 0.2);
-    gain.gain.setValueAtTime(0.15, now);
-    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+    osc.frequency.setValueAtTime(startFreq, now);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration);
+    gain.gain.setValueAtTime(startGain, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + duration);
     osc.start(now);
-    osc.stop(now + 0.2);
+    osc.stop(now + duration);
   } else if (type === 'win') {
     const notes = [523, 659, 784, 1047];
     notes.forEach((freq, i) => {
@@ -90,6 +99,23 @@ function playSound(type: 'place' | 'pop' | 'win' | 'join') {
       o.start(now + i * 0.15);
       o.stop(now + i * 0.15 + 0.3);
     });
+  } else if (type === 'timer-low') {
+    const remaining = opts?.remaining ?? 5;
+    // Map remaining 5..1 to higher->lower pitch
+    const high = 1200;
+    const low = 600;
+    const clamped = Math.max(1, Math.min(5, remaining));
+    const freq = low + ((clamped - 1) / 4) * (high - low);
+    const endFreq = freq * 0.7;
+    const duration = 0.16;
+    const startGain = 0.1;
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(freq, now);
+    osc.frequency.exponentialRampToValueAtTime(endFreq, now + duration);
+    gain.gain.setValueAtTime(startGain, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + duration + 0.02);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
   }
 }
 
@@ -124,6 +150,16 @@ interface Shockwave {
   life: number;
 }
 
+interface ExplosionForce {
+  x: number;
+  y: number;
+  strength: number;
+  radius: number;
+  maxRadius: number;
+  expansionRate: number;
+  life: number;
+}
+
 // Default player configs
 function getDefaultPlayerConfigs(): PlayerConfig[] {
   return [
@@ -150,6 +186,14 @@ export function ChainReactionApp() {
   const [showMenu, setShowMenu] = useState(true);
   const [menuMode, setMenuMode] = useState<'local' | 'online'>('local');
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>(getDefaultPlayerConfigs);
+  const [gameOptions, setGameOptions] = useState({
+    timerEnabled: false,
+    timerSeconds: 30,
+    extraPiecesEnabled: false,
+    extraPiecesPerTurn: 2,
+  });
+  const [showGameOptions, setShowGameOptions] = useState(false);
+  const [turnTimer, setTurnTimer] = useState<number | null>(null);
   
   // Online multiplayer state
   const [nostrMultiplayer] = useState<NostrMultiplayer>(() => getNostrMultiplayer());
@@ -176,6 +220,7 @@ export function ChainReactionApp() {
   const particlesRef = useRef<Particle[]>([]);
   const flyingOrbsRef = useRef<FlyingOrb[]>([]);
   const shockwavesRef = useRef<Shockwave[]>([]);
+  const explosionForcesRef = useRef<ExplosionForce[]>([]);
   const explosionQueueRef = useRef<{ r: number; c: number }[]>([]);
   const explosionCountRef = useRef(0); // Track explosion count to prevent infinite loops
   const MAX_EXPLOSIONS_PER_TURN = 500; // Safety limit
@@ -356,7 +401,10 @@ export function ChainReactionApp() {
       if (!cell) return prev;
       
       cell.owner = player;
-      cell.orbs++;
+      const piecesToAdd = gameOptions.extraPiecesEnabled
+        ? Math.max(1, Math.min(10, gameOptions.extraPiecesPerTurn))
+        : 1;
+      cell.orbs += piecesToAdd;
       
       playSound('place');
       
@@ -408,7 +456,7 @@ export function ChainReactionApp() {
         currentPlayer: nextPlayer,
       };
     });
-  }, [gameState, cellWidth, cellHeight]);
+  }, [gameState, cellWidth, cellHeight, gameOptions]);
 
   // Create online game
   const handleCreateGame = async () => {
@@ -514,6 +562,93 @@ export function ChainReactionApp() {
     return gameState.currentPlayer === myPlayerNumber;
   }, [gameState, gameMode]);
 
+  // Shared game options section (placeholder setting for now)
+  const renderGameOptions = () => (
+    <div className={`game-options-panel ${showGameOptions ? 'open' : ''}`}>
+      <button
+        type="button"
+        className="game-options-toggle"
+        onClick={() => setShowGameOptions(prev => !prev)}
+        aria-expanded={showGameOptions}
+      >
+        <div className="game-options-header">
+          <span className="pill">Optional</span>
+          <div className="game-options-title">
+            <h2>⚙️ Game Options</h2>
+            <p className="game-options-sub">Timer & future rules</p>
+          </div>
+        </div>
+        <span className={`chevron ${showGameOptions ? 'open' : ''}`}>⌄</span>
+      </button>
+
+      <div className={`game-options-body ${showGameOptions ? 'open' : ''}`}>
+        <label className="toggle-row fancy-checkbox">
+          <input
+            type="checkbox"
+            checked={gameOptions.timerEnabled}
+            onChange={(e) => setGameOptions(prev => ({ ...prev, timerEnabled: e.target.checked }))}
+          />
+          <span className="checkbox-visual" aria-hidden="true">
+            <span className="checkbox-dot" />
+          </span>
+          <div>
+            <div className="toggle-title">Player time limit</div>
+            <div className="toggle-sub">Forfeit turn if timer hits zero</div>
+          </div>
+        </label>
+
+        {gameOptions.timerEnabled && (
+          <div className="option-field">
+            <label htmlFor="timer-seconds">Time per turn (seconds)</label>
+            <input
+              id="timer-seconds"
+              type="number"
+              min={5}
+              max={600}
+              value={gameOptions.timerSeconds}
+              onChange={(e) => {
+                const val = Math.max(5, Math.min(600, Number(e.target.value) || 0));
+                setGameOptions(prev => ({ ...prev, timerSeconds: val }));
+              }}
+            />
+          </div>
+        )}
+
+        <label className="toggle-row fancy-checkbox">
+          <input
+            type="checkbox"
+            checked={gameOptions.extraPiecesEnabled}
+            onChange={(e) => setGameOptions(prev => ({ ...prev, extraPiecesEnabled: e.target.checked }))}
+          />
+          <span className="checkbox-visual" aria-hidden="true">
+            <span className="checkbox-dot" />
+          </span>
+          <div>
+            <div className="toggle-title">Increased pieces per turn</div>
+            <div className="toggle-sub">Add multiple pieces each turn</div>
+          </div>
+        </label>
+
+        {gameOptions.extraPiecesEnabled && (
+          <div className="option-field">
+            <label htmlFor="extra-pieces">Pieces per turn (1-10)</label>
+            <input
+              id="extra-pieces"
+              type="number"
+              min={1}
+              max={10}
+              value={gameOptions.extraPiecesPerTurn}
+              onChange={(e) => {
+                const val = Math.max(1, Math.min(10, Number(e.target.value) || 0));
+                setGameOptions(prev => ({ ...prev, extraPiecesPerTurn: val }));
+              }}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   // Resize handler
   useEffect(() => {
     const handleResize = () => {
@@ -613,6 +748,7 @@ export function ChainReactionApp() {
     particlesRef.current = [];
     flyingOrbsRef.current = [];
     shockwavesRef.current = [];
+    explosionForcesRef.current = [];
     explosionQueueRef.current = [];
     setIsAnimating(false);
   };
@@ -644,7 +780,10 @@ export function ChainReactionApp() {
       if (!cell) return prev;
       
       cell.owner = player;
-      cell.orbs++;
+      const piecesToAdd = gameOptions.extraPiecesEnabled
+        ? Math.max(1, Math.min(10, gameOptions.extraPiecesPerTurn))
+        : 1;
+      cell.orbs += piecesToAdd;
       
       playSound('place');
       
@@ -701,7 +840,7 @@ export function ChainReactionApp() {
         currentPlayer: nextPlayer,
       };
     });
-  }, [gameState, cellWidth, cellHeight, gameMode]);
+  }, [gameState, cellWidth, cellHeight, gameMode, gameOptions]);
 
   // Process explosions
   useEffect(() => {
@@ -746,7 +885,7 @@ export function ChainReactionApp() {
           const aliveOwners = new Set(alive.map(c => c.owner));
           const alivePlayers = prev.activePlayers.filter(p => aliveOwners.has(p));
           
-          if (alivePlayers.length <= 1) {
+          if (alivePlayers.length <= 1 && newMovesMade >= prev.activePlayers.length) {
             const finalWinner = alivePlayers[0] || prev.currentPlayer;
             console.log('[Explosion End] Only', alivePlayers.length, 'alive - winner:', finalWinner);
             playSound('win');
@@ -800,16 +939,18 @@ export function ChainReactionApp() {
         const cy = r * cellHeight + cellHeight / 2;
         
         // Explosion particles
-        for (let i = 0; i < 16; i++) {
-          const angle = (Math.PI * 2 * i) / 16;
+        for (let i = 0; i < 34; i++) {
+          const angle = (Math.PI * 2 * i) / 34 + Math.random() * 0.25;
+          const speed = 7 + Math.random() * 6;
+          const size = 3.2 + Math.random() * 2.3;
           particlesRef.current.push({
             x: cx,
             y: cy,
-            vx: Math.cos(angle) * 5,
-            vy: Math.sin(angle) * 5,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed * 0.85,
             color,
             life: 1.0,
-            size: 4,
+            size,
           });
         }
         
@@ -819,7 +960,18 @@ export function ChainReactionApp() {
           y: cy,
           color,
           radius: 0,
-          maxRadius: Math.max(cellWidth, cellHeight) * 0.8,
+          maxRadius: Math.max(cellWidth, cellHeight) * 1.4,
+          life: 1.0,
+        });
+        
+        // Physical force used to push nearby particles
+        explosionForcesRef.current.push({
+          x: cx,
+          y: cy,
+          strength: 22 + Math.random() * 10,
+          radius: Math.min(cellWidth, cellHeight) * 0.4,
+          maxRadius: Math.max(cellWidth, cellHeight) * 2.6,
+          expansionRate: Math.max(cellWidth, cellHeight) * 0.65,
           life: 1.0,
         });
         
@@ -874,7 +1026,12 @@ export function ChainReactionApp() {
     );
     const alivePlayers = gameState.activePlayers.filter(p => ownersWithOrbs.has(p));
     
-    if (alivePlayers.length <= 1) {
+    // If no one has placed an orb yet, don't end the game
+    if (alivePlayers.length === 0) {
+      return;
+    }
+
+    if (alivePlayers.length === 1 && gameState.movesMade >= gameState.activePlayers.length) {
       // Game should end - declare winner
       const winner = alivePlayers[0] || gameState.currentPlayer;
       console.log('[AI] Game over - only', alivePlayers.length, 'player(s) alive. Winner:', winner);
@@ -1027,6 +1184,8 @@ export function ChainReactionApp() {
     
     const draw = () => {
       animationTime += 0.02;
+      const gravity = Math.max(0.2, (dimensions.height / 450) * 0.32);
+      const drag = 0.96;
       
       // Clear
       const bgGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
@@ -1152,15 +1311,44 @@ export function ChainReactionApp() {
         ctx.globalAlpha = 1;
       }
       
+      // Update explosion forces used to push particles
+      explosionForcesRef.current = explosionForcesRef.current.filter(force => {
+        force.radius += force.expansionRate;
+        force.strength *= 0.9;
+        force.life -= 0.06;
+        return force.life > 0 && force.radius < force.maxRadius;
+      });
+      
       // Update and draw particles
       particlesRef.current = particlesRef.current.filter(p => {
+        let ax = 0;
+        let ay = gravity;
+        
+        // Push particles outward from nearby active explosions
+        for (const force of explosionForcesRef.current) {
+          const dx = p.x - force.x;
+          const dy = p.y - force.y;
+          const distSq = dx * dx + dy * dy;
+          const influenceRadius = force.radius + 12;
+          if (distSq < influenceRadius * influenceRadius && distSq > 0.0001) {
+            const dist = Math.sqrt(distSq);
+            const falloff = 1 - dist / influenceRadius;
+            const impulse = force.strength * falloff * 0.02;
+            ax += (dx / dist) * impulse;
+            ay += (dy / dist) * impulse;
+          }
+        }
+        
+        p.vx += ax;
+        p.vy += ay;
+        p.vx *= drag;
+        p.vy *= drag;
         p.x += p.vx;
         p.y += p.vy;
-        p.vx *= 0.94;
-        p.vy *= 0.94;
-        p.life -= 0.04;
+        p.life -= 0.028;
         
         if (p.life <= 0) return false;
+        if (p.y > canvas.height + 120 || p.x < -80 || p.x > canvas.width + 80) return false;
         
         ctx.globalAlpha = Math.max(0, p.life);
         ctx.shadowColor = p.color;
@@ -1177,14 +1365,14 @@ export function ChainReactionApp() {
       
       // Update and draw shockwaves
       shockwavesRef.current = shockwavesRef.current.filter(sw => {
-        sw.radius += 4;
+        sw.radius += 6;
         sw.life = 1 - (sw.radius / sw.maxRadius);
         
         if (sw.life <= 0) return false;
         
-        ctx.globalAlpha = sw.life * 0.5;
+        ctx.globalAlpha = sw.life * 0.65;
         ctx.strokeStyle = sw.color;
-        ctx.lineWidth = 3 * sw.life;
+        ctx.lineWidth = 4.5 * sw.life;
         ctx.beginPath();
         ctx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
         ctx.stroke();
@@ -1243,6 +1431,45 @@ export function ChainReactionApp() {
     
     return () => cancelAnimationFrame(animId);
   }, [gameState, dimensions, cellWidth, cellHeight, cursorPos, currentGamepad, currentPlayerConfig]);
+
+  // Turn timer (local games only to avoid online desync)
+  useEffect(() => {
+    if (!gameOptions.timerEnabled || !gameState || !gameState.gameActive || gameState.winner || gameMode === 'online-game' || isAnimating) {
+      setTurnTimer(null);
+      return;
+    }
+
+    let remaining = gameOptions.timerSeconds;
+    setTurnTimer(remaining);
+
+    const interval = window.setInterval(() => {
+      remaining -= 1;
+      setTurnTimer(remaining);
+
+      if (remaining <= 5 && remaining > 0) {
+        playSound('timer-low', { remaining });
+      }
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        setTurnTimer(0);
+        // Forfeit current player's turn
+        setGameState(prev => {
+          if (!prev || !prev.gameActive || prev.winner) return prev;
+          const newMovesMade = prev.movesMade + 1;
+          const winner = checkWinner(prev.grid, prev.activePlayers, newMovesMade);
+          if (winner) {
+            playSound('win');
+            return { ...prev, movesMade: newMovesMade, winner, gameActive: false };
+          }
+          const nextPlayer = getNextPlayer(prev.currentPlayer, prev.activePlayers, prev.grid, newMovesMade);
+          return { ...prev, movesMade: newMovesMade, currentPlayer: nextPlayer };
+        });
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [gameOptions.timerEnabled, gameOptions.timerSeconds, gameState?.currentPlayer, gameState?.gameActive, gameState?.winner, gameMode, isAnimating]);
 
   // Helper function for rounded rectangles
   function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -1484,6 +1711,8 @@ export function ChainReactionApp() {
                 <div className="relay-status small">
                   🌐 {relayCount > 0 ? `Connected to ${relayCount} relay${relayCount !== 1 ? 's' : ''}` : 'Connecting...'}
                 </div>
+
+                {renderGameOptions()}
               </div>
             ) : (
               <div className="menu-section">
@@ -1511,6 +1740,7 @@ export function ChainReactionApp() {
                     );
                   })}
                 </div>
+                {renderGameOptions()}
                 
                 <button className="menu-btn btn-local" onClick={() => { setGameMode('local'); startGame(); }}>
                   ⚡ Start Local Game
@@ -1564,6 +1794,8 @@ export function ChainReactionApp() {
             })}
           </div>
         </div>
+        
+        {renderGameOptions()}
         
         <div className="menu-buttons">
           <button className="menu-btn btn-start" onClick={startGame}>
@@ -1698,6 +1930,11 @@ export function ChainReactionApp() {
         >
           {getOnlineTurnText()}
         </div>
+      {gameOptions.timerEnabled && turnTimer !== null && gameMode !== 'online-game' && (
+        <div className={`turn-timer ${turnTimer <= 5 ? 'low' : ''}`}>
+          ⏱ {turnTimer}s
+        </div>
+      )}
         
         <button
           className="btn"

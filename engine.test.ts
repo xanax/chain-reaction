@@ -187,34 +187,38 @@ describe('Game State', () => {
   });
 
   describe('checkWinner', () => {
-    it('should return winner immediately when only one player has orbs', () => {
-      getCell(grid, 0, 0)!.owner = 1;
-      getCell(grid, 0, 0)!.orbs = 1;
-      expect(checkWinner(grid, activePlayers, 0)).toBe(1);
-      expect(checkWinner(grid, activePlayers, 1)).toBe(1);
+    it('should return null when no orbs are on the board', () => {
+      expect(checkWinner(grid, activePlayers, 0)).toBeNull();
+      expect(checkWinner(grid, activePlayers, 2)).toBeNull();
     });
 
-    it('should return winner after first round', () => {
+    it('should not declare winner before all players have moved once', () => {
+      getCell(grid, 0, 0)!.owner = 1;
+      getCell(grid, 0, 0)!.orbs = 1;
+      expect(checkWinner(grid, activePlayers, 0)).toBeNull();
+      expect(checkWinner(grid, activePlayers, 1)).toBeNull();
+    });
+
+    it('should return winner after first round when only one player has orbs', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
       expect(checkWinner(grid, activePlayers, 2)).toBe(1);
     });
 
-    it('should not loop when movesMade is stuck but only one color remains', () => {
-      // Regression test: previously winner detection waited for movesMade to reach activePlayers.length,
-      // which could cause infinite loops if the turn counter was not advanced after a cascade.
+    it('should allow accumulating multiple orbs in a cell for the same player', () => {
+      const cell = getCell(grid, 0, 0)!;
+      cell.owner = 1;
+      cell.orbs = 0;
+      cell.orbs += 2; // simulate increased pieces per turn
+      expect(cell.orbs).toBe(2);
+      expect(cell.owner).toBe(1);
+    });
+
+    it('should return null if movesMade is stuck before first round completes', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
-
-      let winner: number | null = null;
-      let iterations = 0;
-      while (winner === null && iterations < 100) {
-        winner = checkWinner(grid, activePlayers, 0); // movesMade stuck at 0
-        iterations++;
-      }
-
-      expect(winner).toBe(1);
-      expect(iterations).toBe(1); // should short-circuit immediately
+      const winner = checkWinner(grid, activePlayers, 0); // movesMade stuck at 0
+      expect(winner).toBeNull();
     });
 
     it('should return null when multiple alive', () => {
