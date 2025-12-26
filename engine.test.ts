@@ -187,17 +187,34 @@ describe('Game State', () => {
   });
 
   describe('checkWinner', () => {
-    it('should return null during first round', () => {
+    it('should return winner immediately when only one player has orbs', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
-      expect(checkWinner(grid, activePlayers, 0)).toBeNull();
-      expect(checkWinner(grid, activePlayers, 1)).toBeNull();
+      expect(checkWinner(grid, activePlayers, 0)).toBe(1);
+      expect(checkWinner(grid, activePlayers, 1)).toBe(1);
     });
 
     it('should return winner after first round', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
       expect(checkWinner(grid, activePlayers, 2)).toBe(1);
+    });
+
+    it('should not loop when movesMade is stuck but only one color remains', () => {
+      // Regression test: previously winner detection waited for movesMade to reach activePlayers.length,
+      // which could cause infinite loops if the turn counter was not advanced after a cascade.
+      getCell(grid, 0, 0)!.owner = 1;
+      getCell(grid, 0, 0)!.orbs = 1;
+
+      let winner: number | null = null;
+      let iterations = 0;
+      while (winner === null && iterations < 100) {
+        winner = checkWinner(grid, activePlayers, 0); // movesMade stuck at 0
+        iterations++;
+      }
+
+      expect(winner).toBe(1);
+      expect(iterations).toBe(1); // should short-circuit immediately
     });
 
     it('should return null when multiple alive', () => {

@@ -746,7 +746,7 @@ export function ChainReactionApp() {
           const aliveOwners = new Set(alive.map(c => c.owner));
           const alivePlayers = prev.activePlayers.filter(p => aliveOwners.has(p));
           
-          if (alivePlayers.length <= 1 && newMovesMade >= prev.activePlayers.length) {
+          if (alivePlayers.length <= 1) {
             const finalWinner = alivePlayers[0] || prev.currentPlayer;
             console.log('[Explosion End] Only', alivePlayers.length, 'alive - winner:', finalWinner);
             playSound('win');
@@ -874,7 +874,7 @@ export function ChainReactionApp() {
     );
     const alivePlayers = gameState.activePlayers.filter(p => ownersWithOrbs.has(p));
     
-    if (alivePlayers.length <= 1 && gameState.movesMade >= gameState.activePlayers.length) {
+    if (alivePlayers.length <= 1) {
       // Game should end - declare winner
       const winner = alivePlayers[0] || gameState.currentPlayer;
       console.log('[AI] Game over - only', alivePlayers.length, 'player(s) alive. Winner:', winner);

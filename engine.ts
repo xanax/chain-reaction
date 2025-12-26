@@ -117,8 +117,6 @@ export function checkWinner(
   activePlayers: number[],
   movesMade: number
 ): number | null {
-  if (movesMade < activePlayers.length) return null;
-  
   const alive = getAlivePlayers(grid, activePlayers);
   if (alive.length === 1) {
     return alive[0];
