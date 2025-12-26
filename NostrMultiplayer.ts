@@ -87,7 +87,7 @@ class NostrRelay {
   private url: string;
   private connected = false;
   private messageQueue: string[] = [];
-  private subscriptions = new Map<string, EventCallback>();
+  private subscriptions = new Map<string, { filter: any; callback: EventCallback }>();
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   
@@ -110,6 +110,13 @@ class NostrRelay {
           while (this.messageQueue.length > 0) {
             const msg = this.messageQueue.shift()!;
             this.ws?.send(msg);
+          }
+
+          // Re-establish subscriptions after reconnect
+          for (const [subId, { filter }] of this.subscriptions.entries()) {
+            const message = JSON.stringify(['REQ', subId, filter]);
+            this.ws?.send(message);
+            console.log(`[Relay] Re-subscribed to ${subId} on ${this.url}`);
           }
           resolve(true);
         };
@@ -156,7 +163,7 @@ class NostrRelay {
     const [type, subId, event] = message;
     
     if (type === 'EVENT' && this.subscriptions.has(subId)) {
-      const callback = this.subscriptions.get(subId)!;
+      const { callback } = this.subscriptions.get(subId)!;
       try {
         const eventType = event.tags.find((t: string[]) => t[0] === 'type')?.[1];
         const data = JSON.parse(event.content);
@@ -189,7 +196,7 @@ class NostrRelay {
   }
   
   subscribe(subId: string, filter: any, callback: EventCallback) {
-    this.subscriptions.set(subId, callback);
+    this.subscriptions.set(subId, { filter, callback });
     const message = JSON.stringify(['REQ', subId, filter]);
     this.send(message);
     console.log(`[Relay] Subscribed to ${subId}`);
@@ -404,7 +411,7 @@ export class NostrMultiplayer {
         this.handleStart(data);
         break;
       case 'move':
-        this.handleMove(data);
+        this.handleMove(data, senderId);
         break;
       case 'sync':
         this.handleSync(data);
@@ -496,12 +503,20 @@ export class NostrMultiplayer {
     this.eventCallbacks.forEach(cb => cb('start', { players: this.players }, this.hostId));
   }
   
-  private handleMove(data: NostrMoveData) {
+  private handleMove(data: NostrMoveData, senderId: string) {
     console.log(`[NostrMultiplayer] Move received:`, data);
-    this.movesMade = data.moveNumber;
-    
-    // Forward to game
-    this.eventCallbacks.forEach(cb => cb('move', data, ''));
+
+    // Ignore stale/duplicate move numbers (can happen when relays replay history on reconnect)
+    if (data.moveNumber <= this.movesMade) {
+      console.log(
+        `[NostrMultiplayer] Ignoring stale move (moveNumber ${data.moveNumber} <= movesMade ${this.movesMade})`
+      );
+      return;
+    }
+
+    // Forward to game. We intentionally do NOT mutate movesMade/currentPlayerIndex here;
+    // ChainReactionApp advances turns based on actual game logic (including explosion chains).
+    this.eventCallbacks.forEach(cb => cb('move', data, senderId));
   }
   
   private handleSync(data: NostrGameState) {
@@ -586,8 +601,8 @@ export class NostrMultiplayer {
   }
   
   // Make a move
-  async makeMove(r: number, c: number): Promise<boolean> {
-    if (!this.isMyTurn()) {
+  async makeMove(r: number, c: number, opts?: { skipTurnCheck?: boolean }): Promise<boolean> {
+    if (!opts?.skipTurnCheck && !this.isMyTurn()) {
       console.log('[NostrMultiplayer] Not your turn!');
       return false;
     }
