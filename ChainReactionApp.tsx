@@ -148,6 +148,7 @@ export function ChainReactionApp() {
   
   // Menu state (for local game)
   const [showMenu, setShowMenu] = useState(true);
+  const [menuMode, setMenuMode] = useState<'local' | 'online'>('local');
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>(getDefaultPlayerConfigs);
   
   // Online multiplayer state
@@ -485,6 +486,7 @@ export function ChainReactionApp() {
     setJoinCode('');
     setGameState(null);
     setShowMenu(true);
+    setMenuMode('online'); // Return to online tab so user can rejoin/create
   };
 
   // Copy share link
@@ -1400,108 +1402,129 @@ export function ChainReactionApp() {
   // Render main menu with mode selection
   if (showMenu && gameMode === 'menu') {
     return (
-      <div className="menu-overlay">
-        <div className="logo-container">
-          <h1>Chain Reaction</h1>
-          <p className="subtitle">1-4 Players • Local or Online</p>
-        </div>
-        
-        {/* Online multiplayer section */}
-        <div className="menu-section online-section">
-          <h2>🌐 Online Multiplayer</h2>
-          
-          <div className="online-form">
-            <input
-              type="text"
-              className="name-input"
-              placeholder="Your Name"
-              value={playerName}
-              onChange={(e) => setPlayerName(e.target.value)}
-              maxLength={20}
-              onKeyPress={(e) => {
-                if (e.key === 'Enter') {
-                  if (joinCode) handleJoinGame();
-                  else handleCreateGame();
-                }
-              }}
-            />
-            
-            <div className="online-buttons">
-              <button
-                className="menu-btn btn-create"
-                onClick={handleCreateGame}
-                disabled={!playerName.trim() || isConnecting}
-              >
-                {isConnecting ? '...' : '+ Create Game'}
-              </button>
-              
-              <div className="join-section">
-                <input
-                  type="text"
-                  className="code-input"
-                  placeholder="CODE"
-                  value={joinCode}
-                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
-                  maxLength={4}
-                  onKeyPress={(e) => e.key === 'Enter' && handleJoinGame()}
-                />
-                <button
-                  className="menu-btn btn-join"
-                  onClick={handleJoinGame}
-                  disabled={!playerName.trim() || !joinCode.trim() || isConnecting}
-                >
-                  {isConnecting ? '...' : 'Join'}
+      <div className="menu-overlay menu-home">
+        <div className="menu-content">
+          <div className="logo-container">
+            <h1>Chain Reaction</h1>
+            <p className="subtitle">1-4 Players • Local or Online</p>
+          </div>
+
+          <div className="mode-switch" role="group" aria-label="Choose setup mode">
+            <button
+              className={`mode-option ${menuMode === 'local' ? 'active' : ''}`}
+              onClick={() => setMenuMode('local')}
+            >
+              🎮 Local Setup
+            </button>
+            <button
+              className={`mode-option ${menuMode === 'online' ? 'active' : ''}`}
+              onClick={() => setMenuMode('online')}
+            >
+              🌐 Online Setup
+            </button>
+          </div>
+
+          <div className="mode-hint">
+            {menuMode === 'local'
+              ? 'Play on this device with friends or AI.'
+              : 'Create or join a lobby to play online.'}
+          </div>
+
+          <div className="menu-body">
+            {menuMode === 'online' ? (
+              <div className="menu-section online-section">
+                <h2>🌐 Online Multiplayer</h2>
+                
+                <div className="online-form">
+                  <input
+                    type="text"
+                    className="name-input"
+                    placeholder="Your Name"
+                    value={playerName}
+                    onChange={(e) => setPlayerName(e.target.value)}
+                    maxLength={20}
+                    onKeyPress={(e) => {
+                      if (e.key === 'Enter') {
+                        if (joinCode) handleJoinGame();
+                        else handleCreateGame();
+                      }
+                    }}
+                  />
+                  
+                  <div className="online-buttons">
+                    <button
+                      className="menu-btn btn-create"
+                      onClick={handleCreateGame}
+                      disabled={!playerName.trim() || isConnecting}
+                    >
+                      {isConnecting ? '...' : '+ Create Game'}
+                    </button>
+                    
+                    <div className="join-section">
+                      <input
+                        type="text"
+                        className="code-input"
+                        placeholder="CODE"
+                        value={joinCode}
+                        onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                        maxLength={4}
+                        onKeyPress={(e) => e.key === 'Enter' && handleJoinGame()}
+                      />
+                      <button
+                        className="menu-btn btn-join"
+                        onClick={handleJoinGame}
+                        disabled={!playerName.trim() || !joinCode.trim() || isConnecting}
+                      >
+                        {isConnecting ? '...' : 'Join'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="relay-status small">
+                  🌐 {relayCount > 0 ? `Connected to ${relayCount} relay${relayCount !== 1 ? 's' : ''}` : 'Connecting...'}
+                </div>
+              </div>
+            ) : (
+              <div className="menu-section">
+                <h2>🎮 Local Game</h2>
+                <div className="player-setup">
+                  {playerConfigs.map((config, idx) => {
+                    const playerNum = idx + 1;
+                    const color = getPlayerColor(playerNum);
+                    
+                    return (
+                      <button
+                        key={idx}
+                        className={`player-toggle ${config.type}`}
+                        style={{ color, borderColor: config.type !== 'off' ? color : undefined }}
+                        onClick={() => cyclePlayerType(idx)}
+                      >
+                        <span className="icon">
+                          {config.type === 'human' ? '👤' : config.type === 'ai' ? '🤖' : '⭕'}
+                        </span>
+                        <span>P{playerNum}</span>
+                        <span style={{ fontSize: '0.6rem' }}>
+                          {config.type === 'human' ? 'HUMAN' : config.type === 'ai' ? 'AI' : 'OFF'}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                
+                <button className="menu-btn btn-local" onClick={() => { setGameMode('local'); startGame(); }}>
+                  ⚡ Start Local Game
                 </button>
               </div>
+            )}
+          </div>
+
+          {gamepads.length > 0 && (
+            <div className={`gamepad-hint connected`}>
+              🎮 {gamepads.length} Controller{gamepads.length > 1 ? 's' : ''} Connected
             </div>
-          </div>
-          
-          <div className="relay-status small">
-            🌐 {relayCount > 0 ? `Connected to ${relayCount} relay${relayCount !== 1 ? 's' : ''}` : 'Connecting...'}
-          </div>
+          )}
         </div>
-        
-        <div className="divider">
-          <span>or play locally</span>
-        </div>
-        
-        {/* Local game section */}
-        <div className="menu-section">
-          <h2>🎮 Local Game</h2>
-          <div className="player-setup">
-            {playerConfigs.map((config, idx) => {
-              const playerNum = idx + 1;
-              const color = getPlayerColor(playerNum);
-              
-              return (
-                <button
-                  key={idx}
-                  className={`player-toggle ${config.type}`}
-                  style={{ color, borderColor: config.type !== 'off' ? color : undefined }}
-                  onClick={() => cyclePlayerType(idx)}
-                >
-                  <span className="icon">
-                    {config.type === 'human' ? '👤' : config.type === 'ai' ? '🤖' : '⭕'}
-                  </span>
-                  <span>P{playerNum}</span>
-                  <span style={{ fontSize: '0.6rem' }}>
-                    {config.type === 'human' ? 'HUMAN' : config.type === 'ai' ? 'AI' : 'OFF'}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-          
-          <button className="menu-btn btn-local" onClick={() => { setGameMode('local'); startGame(); }}>
-            ⚡ Start Local Game
-          </button>
-        </div>
-        
-        {gamepads.length > 0 && (
-          <div className={`gamepad-hint connected`}>
-            🎮 {gamepads.length} Controller{gamepads.length > 1 ? 's' : ''} Connected
-          </div>
-        )}
       </div>
     );
   }
