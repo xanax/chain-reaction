@@ -42,7 +42,7 @@ function getAudioContext(): AudioContext {
   return audioCtx;
 }
 
-function playSound(type: 'place' | 'pop' | 'win') {
+function playSound(type: 'place' | 'pop' | 'win' | 'join') {
   const ctx = getAudioContext();
   if (ctx.state === 'suspended') ctx.resume();
   
@@ -61,6 +61,14 @@ function playSound(type: 'place' | 'pop' | 'win') {
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
     osc.start(now);
     osc.stop(now + 0.15);
+  } else if (type === 'join') {
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(600, now);
+    osc.frequency.exponentialRampToValueAtTime(900, now + 0.12);
+    gain.gain.setValueAtTime(0.1, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
+    osc.start(now);
+    osc.stop(now + 0.12);
   } else if (type === 'pop') {
     osc.type = 'sawtooth';
     osc.frequency.setValueAtTime(200, now);
@@ -293,7 +301,9 @@ export function ChainReactionApp() {
   const handleNostrEvent = useCallback((type: NostrEventType, data: any, senderId: string) => {
     console.log('[App] Processing Nostr event:', type);
     
-    if (type === 'start') {
+    if (type === 'join') {
+      playSound('join');
+    } else if (type === 'start') {
       console.log('[App] Game start event received - starting game for this client');
       // Start the game on this client when we receive the start event
       startOnlineGame();
