@@ -345,7 +345,7 @@ export function ChainReactionApp() {
 
   // Handle Nostr events - uses refs to avoid stale closure issues
   const handleNostrEvent = useCallback((type: NostrEventType, data: any, senderId: string) => {
-    console.log('[App] Processing Nostr event:', type);
+    console.log('[App] Processing Nostr event:', type, 'from', senderId);
     
     if (type === 'join') {
       playSound('join');

@@ -24,7 +24,7 @@ class PlayerSimulator {
   gameState: GameState;
   multiplayerState: MultiplayerState;
   
-  constructor(id: string, name: string, playerNumber: number, players: { id: string; playerNumber: number }[]) {
+  constructor(id: string, name: string, players: { id: string; playerNumber: number }[]) {
     this.id = id;
     this.name = name;
     this.gameState = {
@@ -65,7 +65,7 @@ class PlayerSimulator {
   executeLocalMove(): void {
     // Update game state
     const newMovesMade = this.gameState.movesMade + 1;
-    const nextPlayer = this.getNextPlayer(newMovesMade);
+    const nextPlayer = this.getNextPlayer();
     this.gameState.movesMade = newMovesMade;
     this.gameState.currentPlayer = nextPlayer;
     
@@ -77,7 +77,7 @@ class PlayerSimulator {
   executeRemoteMove(): void {
     // Update game state (same as local)
     const newMovesMade = this.gameState.movesMade + 1;
-    const nextPlayer = this.getNextPlayer(newMovesMade);
+    const nextPlayer = this.getNextPlayer();
     this.gameState.movesMade = newMovesMade;
     this.gameState.currentPlayer = nextPlayer;
     
@@ -85,7 +85,7 @@ class PlayerSimulator {
     this.advancePlayer();
   }
   
-  private getNextPlayer(movesMade: number): number {
+  private getNextPlayer(): number {
     // Simple 2-player rotation
     const currentIdx = this.gameState.activePlayers.indexOf(this.gameState.currentPlayer);
     return this.gameState.activePlayers[(currentIdx + 1) % this.gameState.activePlayers.length];
@@ -108,8 +108,8 @@ describe('Multiplayer Turn Synchronization Bug', () => {
       { id: 'p2', playerNumber: 2 },
     ];
     
-    player1 = new PlayerSimulator('p1', 'Player1', 1, [...players]);
-    player2 = new PlayerSimulator('p2', 'Player2', 2, [...players]);
+    player1 = new PlayerSimulator('p1', 'Player1', [...players]);
+    player2 = new PlayerSimulator('p2', 'Player2', [...players]);
   });
   
   it('should start with correct initial state', () => {
@@ -256,7 +256,7 @@ describe('Network Delay Simulation - The Real Bug', () => {
     multiplayerState: MultiplayerState;
     pendingMoves: { r: number; c: number; player: number; moveNumber: number }[] = [];
     
-    constructor(id: string, name: string, playerNumber: number, players: { id: string; playerNumber: number }[]) {
+    constructor(id: string, name: string, players: { id: string; playerNumber: number }[]) {
       this.id = id;
       this.name = name;
       this.gameState = {
@@ -318,8 +318,8 @@ describe('Network Delay Simulation - The Real Bug', () => {
       { id: 'p2', playerNumber: 2 },
     ];
     
-    const player1 = new AsyncPlayerSimulator('p1', 'Player1', 1, [...players]);
-    const player2 = new AsyncPlayerSimulator('p2', 'Player2', 2, [...players]);
+    const player1 = new AsyncPlayerSimulator('p1', 'Player1', [...players]);
+    const player2 = new AsyncPlayerSimulator('p2', 'Player2', [...players]);
     
     console.log('=== SIMULATING NETWORK DELAY BUG ===\n');
     

@@ -1,45 +1,7 @@
 // Tests for Nostr Multiplayer functionality
 // Run with: npx vitest run NostrMultiplayer.test.ts
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-// Mock WebSocket for testing
-class MockWebSocket {
-  static OPEN = 1;
-  static CLOSED = 3;
-  
-  url: string;
-  readyState = MockWebSocket.OPEN;
-  onopen: (() => void) | null = null;
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: ((error: any) => void) | null = null;
-  onclose: (() => void) | null = null;
-  sentMessages: string[] = [];
-  
-  constructor(url: string) {
-    this.url = url;
-    // Simulate connection
-    setTimeout(() => {
-      if (this.onopen) this.onopen();
-    }, 10);
-  }
-  
-  send(data: string) {
-    this.sentMessages.push(data);
-  }
-  
-  close() {
-    this.readyState = MockWebSocket.CLOSED;
-    if (this.onclose) this.onclose();
-  }
-  
-  // Helper to simulate receiving a message
-  simulateMessage(data: any) {
-    if (this.onmessage) {
-      this.onmessage({ data: JSON.stringify(data) });
-    }
-  }
-}
+import { describe, it, expect, beforeEach } from 'vitest';
 
 // Mock localStorage
 const localStorageMock = (() => {
@@ -51,19 +13,6 @@ const localStorageMock = (() => {
     clear: () => { store = {}; },
   };
 })();
-
-// Mock window object
-const mockWindow = {
-  location: {
-    origin: 'http://localhost:5173',
-    pathname: '/',
-    search: '',
-    href: 'http://localhost:5173/',
-  },
-  history: {
-    replaceState: vi.fn(),
-  },
-};
 
 // ============================================
 // IDENTITY TESTS
