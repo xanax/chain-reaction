@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest run",
-    "dev": "vite"
+    "dev": "vite",
+    "build": "vite build"
   },
   "repository": {
     "type": "git",
@@ -13,6 +14,7 @@
   },
   "author": "ThreadPoole",
   "dependencies": {
+    "nostr-tools": "^2.19.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

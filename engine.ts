@@ -16,7 +16,7 @@ export interface Cell {
   pulsePhase: number;
 }
 
-export type PlayerType = 'human' | 'ai' | 'off';
+export type PlayerType = 'human' | 'ai' | 'off' | 'network';
 
 export interface PlayerConfig {
   type: PlayerType;

@@ -22,6 +22,16 @@ import {
   useGamepadNavigation,
   GAMEPAD_BUTTONS,
 } from './useGamepads';
+import {
+  NostrMultiplayer,
+  getNostrMultiplayer,
+  NostrPlayer,
+  NostrEventType,
+  NostrMoveData,
+} from './NostrMultiplayer';
+
+// Game mode types
+type GameMode = 'menu' | 'local' | 'online-lobby' | 'online-game' | 'join-prompt';
 
 // Audio context for sound effects
 let audioCtx: AudioContext | null = null;
@@ -116,13 +126,41 @@ function getDefaultPlayerConfigs(): PlayerConfig[] {
   ];
 }
 
+// Create network player configs based on Nostr players
+function createNetworkPlayerConfigs(players: NostrPlayer[], myId: string): PlayerConfig[] {
+  return players.map(player => ({
+    type: player.id === myId ? 'human' : 'network' as PlayerType,
+    controllerId: null,
+  }));
+}
+
 export function ChainReactionApp() {
-  // Menu state
+  // Game mode state
+  const [gameMode, setGameMode] = useState<GameMode>('menu');
+  
+  // Menu state (for local game)
   const [showMenu, setShowMenu] = useState(true);
   const [playerConfigs, setPlayerConfigs] = useState<PlayerConfig[]>(getDefaultPlayerConfigs);
   
+  // Online multiplayer state
+  const [nostrMultiplayer] = useState<NostrMultiplayer>(() => getNostrMultiplayer());
+  const [playerName, setPlayerName] = useState('');
+  const [joinCode, setJoinCode] = useState('');
+  const [onlinePlayers, setOnlinePlayers] = useState<NostrPlayer[]>([]);
+  const [isHost, setIsHost] = useState(false);
+  const [relayCount, setRelayCount] = useState(0);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [pendingJoinCode, setPendingJoinCode] = useState<string | null>(null); // For URL join flow
+  
   // Game state
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const gameStateRef = useRef<GameState | null>(null);
+  
+  // Keep ref in sync with state for use in callbacks
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  }, [gameState]);
   
   // Animation state
   const [isAnimating, setIsAnimating] = useState(false);
@@ -133,10 +171,21 @@ export function ChainReactionApp() {
   const explosionCountRef = useRef(0); // Track explosion count to prevent infinite loops
   const MAX_EXPLOSIONS_PER_TURN = 500; // Safety limit
   
+  // Debounce ref for network moves to prevent double-sends
+  const lastMoveTimeRef = useRef<number>(0);
+  const MOVE_DEBOUNCE_MS = 300;
+  
+  // Track last executed move to prevent double execution
+  const lastExecutedMoveRef = useRef<string>('');
+  
   // Canvas refs
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 300, height: 450 });
+  
+  // Calculate cell dimensions (used by multiple functions)
+  const cellWidth = dimensions.width / GRID_COLS;
+  const cellHeight = dimensions.height / GRID_ROWS;
   
   // Cursor position for gamepad
   const [cursorPos, setCursorPos] = useState({ r: 0, c: 0 });
@@ -144,11 +193,298 @@ export function ChainReactionApp() {
   // Gamepad support
   const { gamepads } = useGamepads();
 
+  // Initialize multiplayer and check for URL join code
+  useEffect(() => {
+    const init = async () => {
+      console.log('[App] Initializing multiplayer...');
+      
+      // Load saved player name
+      const savedName = localStorage.getItem('chain_reaction_player_name');
+      if (savedName) {
+        setPlayerName(savedName);
+        console.log('[App] Loaded saved player name:', savedName);
+      }
+      
+      // Connect to relays
+      const connected = await nostrMultiplayer.connect();
+      setRelayCount(connected);
+      console.log('[App] Connected to', connected, 'relays');
+      
+      // Check for join code in URL
+      const urlJoinCode = nostrMultiplayer.getJoinCodeFromUrl();
+      if (urlJoinCode) {
+        console.log('[App] Found join code in URL:', urlJoinCode);
+        setJoinCode(urlJoinCode);
+        setPendingJoinCode(urlJoinCode);
+        nostrMultiplayer.clearUrlParams();
+        
+        // If we have a saved name, auto-join immediately
+        if (savedName) {
+          console.log('[App] Auto-joining game with saved name:', savedName);
+          setIsConnecting(true);
+          try {
+            await nostrMultiplayer.joinGame(urlJoinCode, savedName);
+            console.log('[App] Successfully joined game');
+            setOnlinePlayers([...nostrMultiplayer.getPlayers()]);
+            setIsHost(nostrMultiplayer.isHost());
+            setGameMode('online-lobby');
+            setPendingJoinCode(null);
+          } catch (e) {
+            console.error('[App] Failed to auto-join:', e);
+          }
+          setIsConnecting(false);
+        } else {
+          // No saved name - show join prompt
+          setGameMode('join-prompt');
+        }
+      }
+      
+      // Set up event handlers
+      nostrMultiplayer.onStateChange(() => {
+        console.log('[App] Nostr state changed');
+        setOnlinePlayers([...nostrMultiplayer.getPlayers()]);
+        setIsHost(nostrMultiplayer.isHost());
+        
+        // Check if game started
+        if (nostrMultiplayer.isPlaying() && (gameMode === 'online-lobby' || gameMode === 'join-prompt')) {
+          console.log('[App] Game started! Transitioning to online game');
+          startOnlineGame();
+        }
+      });
+      
+      nostrMultiplayer.onEvent((type, data, senderId) => {
+        console.log('[App] Received event:', type, data);
+        handleNostrEvent(type, data, senderId);
+      });
+    };
+    
+    init();
+    
+    return () => {
+      // Cleanup on unmount
+    };
+  }, []);
 
-  
-  // Calculate cell dimensions
-  const cellWidth = dimensions.width / GRID_COLS;
-  const cellHeight = dimensions.height / GRID_ROWS;
+  // Start online game - called both when host starts and when joiners receive start event
+  const startOnlineGame = useCallback(() => {
+    const players = nostrMultiplayer.getPlayers();
+    console.log('[App] Starting online game with', players.length, 'players');
+    
+    const activePlayers = players.map(p => p.playerNumber || 1);
+    const configs = createNetworkPlayerConfigs(players, nostrMultiplayer.getMyId());
+    
+    setGameState({
+      grid: createGrid(),
+      currentPlayer: activePlayers[0],
+      movesMade: 0,
+      gameActive: true,
+      winner: null,
+      playerConfigs: configs,
+      activePlayers,
+    });
+    
+    setPlayerConfigs(configs);
+    setCursorPos({ r: Math.floor(GRID_ROWS / 2), c: Math.floor(GRID_COLS / 2) });
+    setGameMode('online-game');
+    setShowMenu(false);
+  }, []);
+
+  // Handle Nostr events - uses refs to avoid stale closure issues
+  const handleNostrEvent = useCallback((type: NostrEventType, data: any, senderId: string) => {
+    console.log('[App] Processing Nostr event:', type);
+    
+    if (type === 'start') {
+      console.log('[App] Game start event received - starting game for this client');
+      // Start the game on this client when we receive the start event
+      startOnlineGame();
+    } else if (type === 'move') {
+      const moveData = data as NostrMoveData;
+      console.log('[App] Remote move received:', moveData);
+      
+      // Check for duplicate move using ref (prevents double execution)
+      const moveKey = `${moveData.r}-${moveData.c}-${moveData.moveNumber}`;
+      if (lastExecutedMoveRef.current === moveKey) {
+        console.log('[App] Skipping duplicate move:', moveKey);
+        return;
+      }
+      lastExecutedMoveRef.current = moveKey;
+      
+      // Use ref to check current game state (avoids stale closure)
+      const currentGameState = gameStateRef.current;
+      if (!currentGameState) {
+        console.log('[App] No game state yet, queuing move for retry...');
+        // Retry after a short delay to allow game state to be set
+        setTimeout(() => {
+          console.log('[App] Retrying remote move execution...');
+          executeRemoteMove(moveData.r, moveData.c, moveData.player);
+        }, 500);
+        return;
+      }
+      
+      // Execute the remote move
+      executeRemoteMove(moveData.r, moveData.c, moveData.player);
+    }
+  }, [startOnlineGame]);
+
+  // Execute a remote player's move (no validation needed - trust network)
+  const executeRemoteMove = useCallback((r: number, c: number, player: number) => {
+    // Use ref to check current game state (avoids stale closure)
+    const currentGameState = gameStateRef.current;
+    if (!currentGameState || !currentGameState.gameActive || currentGameState.winner) {
+      console.log('[App] Cannot execute remote move - game not active, state:', currentGameState);
+      return;
+    }
+    
+    console.log('[App] Executing remote move:', r, c, 'player', player);
+    
+    setGameState(prev => {
+      if (!prev) return prev;
+      
+      const newGrid = prev.grid.map(cell => ({ ...cell }));
+      const cell = getCell(newGrid, r, c);
+      if (!cell) return prev;
+      
+      cell.owner = player;
+      cell.orbs++;
+      
+      playSound('place');
+      
+      // Add placement particles
+      const cx = c * cellWidth + cellWidth / 2;
+      const cy = r * cellHeight + cellHeight / 2;
+      const color = PLAYER_COLORS[player as keyof typeof PLAYER_COLORS]?.primary || '#fff';
+      
+      for (let i = 0; i < 8; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const speed = 3 + Math.random() * 2;
+        particlesRef.current.push({
+          x: cx,
+          y: cy,
+          vx: Math.cos(angle) * speed,
+          vy: Math.sin(angle) * speed,
+          color,
+          life: 1.0,
+          size: 2,
+        });
+      }
+      
+      // Check for explosion
+      if (cell.orbs > cell.capacity) {
+        explosionQueueRef.current.push({ r, c });
+        setIsAnimating(true);
+        return {
+          ...prev,
+          grid: newGrid,
+        };
+      }
+      
+      // No explosion - switch turn immediately
+      const newMovesMade = prev.movesMade + 1;
+      const winner = checkWinner(newGrid, prev.activePlayers, newMovesMade);
+      if (winner) {
+        playSound('win');
+        nostrMultiplayer.setWinner(winner);
+        return { ...prev, grid: newGrid, movesMade: newMovesMade, winner, gameActive: false };
+      }
+      
+      const nextPlayer = getNextPlayer(prev.currentPlayer, prev.activePlayers, newGrid, newMovesMade);
+      nostrMultiplayer.advancePlayer();
+      console.log('[App] Remote move - switching from player', prev.currentPlayer, 'to', nextPlayer);
+      return {
+        ...prev,
+        grid: newGrid,
+        movesMade: newMovesMade,
+        currentPlayer: nextPlayer,
+      };
+    });
+  }, [gameState, cellWidth, cellHeight]);
+
+  // Create online game
+  const handleCreateGame = async () => {
+    if (!playerName.trim()) {
+      console.log('[App] Player name required');
+      return;
+    }
+    
+    setIsConnecting(true);
+    console.log('[App] Creating online game as', playerName);
+    
+    localStorage.setItem('chain_reaction_player_name', playerName.trim());
+    
+    const code = await nostrMultiplayer.createGame(playerName.trim());
+    console.log('[App] Game created with code:', code);
+    
+    setOnlinePlayers([...nostrMultiplayer.getPlayers()]);
+    setIsHost(true);
+    setGameMode('online-lobby');
+    setIsConnecting(false);
+  };
+
+  // Join online game
+  const handleJoinGame = async () => {
+    if (!playerName.trim()) {
+      console.log('[App] Player name required');
+      return;
+    }
+    
+    const codeToJoin = joinCode.trim() || pendingJoinCode;
+    if (!codeToJoin) {
+      console.log('[App] Game code required');
+      return;
+    }
+    
+    setIsConnecting(true);
+    console.log('[App] Joining game', codeToJoin, 'as', playerName);
+    
+    localStorage.setItem('chain_reaction_player_name', playerName.trim());
+    
+    await nostrMultiplayer.joinGame(codeToJoin, playerName.trim());
+    console.log('[App] Joined game');
+    
+    setOnlinePlayers([...nostrMultiplayer.getPlayers()]);
+    setIsHost(nostrMultiplayer.isHost());
+    setGameMode('online-lobby');
+    setPendingJoinCode(null);
+    setIsConnecting(false);
+  };
+
+  // Start online game (host only)
+  const handleStartOnlineGame = async () => {
+    if (!isHost) {
+      console.log('[App] Only host can start');
+      return;
+    }
+    
+    if (onlinePlayers.length < 2) {
+      console.log('[App] Need at least 2 players');
+      return;
+    }
+    
+    console.log('[App] Host starting game...');
+    await nostrMultiplayer.startGame();
+    startOnlineGame();
+  };
+
+  // Leave online game
+  const handleLeaveGame = async () => {
+    console.log('[App] Leaving game');
+    await nostrMultiplayer.leaveGame();
+    setGameMode('menu');
+    setOnlinePlayers([]);
+    setIsHost(false);
+    setJoinCode('');
+    setGameState(null);
+    setShowMenu(true);
+  };
+
+  // Copy share link
+  const copyShareLink = () => {
+    const url = nostrMultiplayer.getShareUrl();
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    console.log('[App] Copied share link:', url);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   // Get active player's gamepad (for the current turn)
   const currentPlayerConfig = gameState 
@@ -262,9 +598,23 @@ export function ChainReactionApp() {
   };
 
   // Execute a move
-  const executeMove = useCallback((r: number, c: number, player: number) => {
+  const executeMove = useCallback((r: number, c: number, player: number, isNetworkMove = false) => {
     if (!gameState || !gameState.gameActive || gameState.winner) return;
     if (!validateMove(gameState.grid, r, c, player)) return;
+    
+    // Prevent double execution of the same move using ref
+    const moveKey = `${r}-${c}-${gameState.movesMade + 1}-${isNetworkMove ? 'net' : 'local'}`;
+    if (lastExecutedMoveRef.current === moveKey) {
+      console.log('[App] Skipping duplicate executeMove:', moveKey);
+      return;
+    }
+    lastExecutedMoveRef.current = moveKey;
+    
+    // For online games, publish the move to network (unless it's a network move we received)
+    if (gameMode === 'online-game' && !isNetworkMove) {
+      console.log('[App] Publishing local move to network:', r, c, player);
+      nostrMultiplayer.makeMove(r, c);
+    }
     
     setGameState(prev => {
       if (!prev) return prev;
@@ -313,10 +663,16 @@ export function ChainReactionApp() {
       const winner = checkWinner(newGrid, prev.activePlayers, newMovesMade);
       if (winner) {
         playSound('win');
+        if (gameMode === 'online-game') {
+          nostrMultiplayer.setWinner(winner);
+        }
         return { ...prev, grid: newGrid, movesMade: newMovesMade, winner, gameActive: false };
       }
       
       const nextPlayer = getNextPlayer(prev.currentPlayer, prev.activePlayers, newGrid, newMovesMade);
+      if (gameMode === 'online-game') {
+        nostrMultiplayer.advancePlayer();
+      }
       console.log('[Turn] No explosion - switching from player', prev.currentPlayer, 'to', nextPlayer);
       return {
         ...prev,
@@ -325,7 +681,7 @@ export function ChainReactionApp() {
         currentPlayer: nextPlayer,
       };
     });
-  }, [gameState, cellWidth, cellHeight]);
+  }, [gameState, cellWidth, cellHeight, gameMode]);
 
   // Process explosions
   useEffect(() => {
@@ -359,6 +715,9 @@ export function ChainReactionApp() {
           if (winner) {
             console.log('[Explosion End] Winner detected:', winner);
             playSound('win');
+            if (gameMode === 'online-game') {
+              nostrMultiplayer.setWinner(winner);
+            }
             return { ...prev, movesMade: newMovesMade, winner, gameActive: false };
           }
           
@@ -371,6 +730,9 @@ export function ChainReactionApp() {
             const finalWinner = alivePlayers[0] || prev.currentPlayer;
             console.log('[Explosion End] Only', alivePlayers.length, 'alive - winner:', finalWinner);
             playSound('win');
+            if (gameMode === 'online-game') {
+              nostrMultiplayer.setWinner(finalWinner);
+            }
             return { ...prev, movesMade: newMovesMade, winner: finalWinner, gameActive: false };
           }
           
@@ -380,9 +742,15 @@ export function ChainReactionApp() {
           if (nextPlayer === prev.currentPlayer && alivePlayers.length <= 1) {
             console.log('[Explosion End] Loop detected - declaring winner:', prev.currentPlayer);
             playSound('win');
+            if (gameMode === 'online-game') {
+              nostrMultiplayer.setWinner(prev.currentPlayer);
+            }
             return { ...prev, movesMade: newMovesMade, winner: prev.currentPlayer, gameActive: false };
           }
           
+          if (gameMode === 'online-game') {
+            nostrMultiplayer.advancePlayer();
+          }
           console.log('[Turn] Switching from player', prev.currentPlayer, 'to', nextPlayer, 'movesMade:', newMovesMade);
           return { ...prev, movesMade: newMovesMade, currentPlayer: nextPlayer };
         });
@@ -540,6 +908,21 @@ export function ChainReactionApp() {
     const config = gameState.playerConfigs[gameState.currentPlayer - 1];
     if (config.type !== 'human') return;
     
+    // For online games, only allow moves on your turn with debounce
+    if (gameMode === 'online-game') {
+      if (!nostrMultiplayer.isMyTurn()) {
+        console.log('[App] Not your turn in online game');
+        return;
+      }
+      // Debounce to prevent double clicks
+      const now = Date.now();
+      if (now - lastMoveTimeRef.current < MOVE_DEBOUNCE_MS) {
+        console.log('[App] Move debounced - too fast');
+        return;
+      }
+      lastMoveTimeRef.current = now;
+    }
+    
     const rect = canvasRef.current!.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
@@ -557,6 +940,21 @@ export function ChainReactionApp() {
     
     const config = gameState.playerConfigs[gameState.currentPlayer - 1];
     if (config.type !== 'human') return;
+    
+    // For online games, only allow moves on your turn with debounce
+    if (gameMode === 'online-game') {
+      if (!nostrMultiplayer.isMyTurn()) {
+        console.log('[App] Not your turn in online game');
+        return;
+      }
+      // Debounce to prevent double taps
+      const now = Date.now();
+      if (now - lastMoveTimeRef.current < MOVE_DEBOUNCE_MS) {
+        console.log('[App] Move debounced - too fast');
+        return;
+      }
+      lastMoveTimeRef.current = now;
+    }
     
     const rect = canvasRef.current!.getBoundingClientRect();
     const touch = e.touches[0];
@@ -846,7 +1244,251 @@ export function ChainReactionApp() {
     return PLAYER_COLORS[player as keyof typeof PLAYER_COLORS]?.primary || '#fff';
   };
 
-  // Render menu
+  // Render join prompt (when joining via URL link)
+  if (gameMode === 'join-prompt') {
+    return (
+      <div className="menu-overlay">
+        <div className="logo-container">
+          <h1>Chain Reaction</h1>
+          <p className="subtitle">Join Game</p>
+        </div>
+        
+        <div className="join-prompt">
+          <div className="game-code-display">
+            <span className="label">Joining Game</span>
+            <span className="code">{pendingJoinCode || joinCode}</span>
+          </div>
+          
+          <div className="join-form">
+            <input
+              type="text"
+              className="name-input large"
+              placeholder="Enter your name"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              maxLength={20}
+              autoFocus
+              onKeyPress={(e) => e.key === 'Enter' && handleJoinGame()}
+            />
+            
+            <button
+              className="menu-btn btn-join-big"
+              onClick={handleJoinGame}
+              disabled={!playerName.trim() || isConnecting}
+            >
+              {isConnecting ? '⏳ Joining...' : '🎮 Join Game'}
+            </button>
+          </div>
+          
+          <button
+            className="btn-cancel"
+            onClick={() => {
+              setPendingJoinCode(null);
+              setJoinCode('');
+              setGameMode('menu');
+            }}
+          >
+            ← Back to Menu
+          </button>
+          
+          <div className="relay-status">
+            🌐 Connected to {relayCount} relay{relayCount !== 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Render online lobby (waiting room)
+  if (gameMode === 'online-lobby') {
+    return (
+      <div className="menu-overlay">
+        <div className="logo-container">
+          <h1>Chain Reaction</h1>
+          <p className="subtitle">Waiting Room</p>
+        </div>
+        
+        <div className="online-lobby">
+          <div className="game-code-display">
+            <span className="label">Game Code</span>
+            <span className="code">{nostrMultiplayer.getGameCode()}</span>
+          </div>
+          
+          <div className="share-section">
+            <input
+              type="text"
+              className="share-input"
+              value={nostrMultiplayer.getShareUrl()}
+              readOnly
+              onClick={(e) => (e.target as HTMLInputElement).select()}
+            />
+            <button className="btn-copy" onClick={copyShareLink}>
+              {copied ? '✓ Copied!' : '📋 Copy Link'}
+            </button>
+          </div>
+          
+          <div className="players-list">
+            <h3>Players ({onlinePlayers.length}/4)</h3>
+            {onlinePlayers.map((player, idx) => (
+              <div
+                key={player.id}
+                className="player-item"
+                style={{ color: getPlayerColor(idx + 1) }}
+              >
+                <span className="player-number">P{idx + 1}</span>
+                <span className="player-name">{player.name}</span>
+                {player.id === nostrMultiplayer.getMyId() && <span className="you-badge">YOU</span>}
+                {idx === 0 && <span className="host-badge">HOST</span>}
+              </div>
+            ))}
+            
+            {onlinePlayers.length < 4 && (
+              <div className="waiting-message">
+                ⏳ Waiting for more players...
+              </div>
+            )}
+          </div>
+          
+          <div className="lobby-buttons">
+            {isHost && (
+              <button
+                className="menu-btn btn-start"
+                onClick={handleStartOnlineGame}
+                disabled={onlinePlayers.length < 2}
+              >
+                ⚡ Start Game ({onlinePlayers.length}/2+ players)
+              </button>
+            )}
+            
+            {!isHost && (
+              <div className="waiting-host">
+                Waiting for host to start the game...
+              </div>
+            )}
+            
+            <button className="menu-btn btn-leave" onClick={handleLeaveGame}>
+              ← Leave Game
+            </button>
+          </div>
+          
+          <div className="relay-status">
+            🌐 Connected to {relayCount} relay{relayCount !== 1 ? 's' : ''}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Render main menu with mode selection
+  if (showMenu && gameMode === 'menu') {
+    return (
+      <div className="menu-overlay">
+        <div className="logo-container">
+          <h1>Chain Reaction</h1>
+          <p className="subtitle">1-4 Players • Local or Online</p>
+        </div>
+        
+        {/* Online multiplayer section */}
+        <div className="menu-section online-section">
+          <h2>🌐 Online Multiplayer</h2>
+          
+          <div className="online-form">
+            <input
+              type="text"
+              className="name-input"
+              placeholder="Your Name"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              maxLength={20}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  if (joinCode) handleJoinGame();
+                  else handleCreateGame();
+                }
+              }}
+            />
+            
+            <div className="online-buttons">
+              <button
+                className="menu-btn btn-create"
+                onClick={handleCreateGame}
+                disabled={!playerName.trim() || isConnecting}
+              >
+                {isConnecting ? '...' : '+ Create Game'}
+              </button>
+              
+              <div className="join-section">
+                <input
+                  type="text"
+                  className="code-input"
+                  placeholder="CODE"
+                  value={joinCode}
+                  onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
+                  maxLength={4}
+                  onKeyPress={(e) => e.key === 'Enter' && handleJoinGame()}
+                />
+                <button
+                  className="menu-btn btn-join"
+                  onClick={handleJoinGame}
+                  disabled={!playerName.trim() || !joinCode.trim() || isConnecting}
+                >
+                  {isConnecting ? '...' : 'Join'}
+                </button>
+              </div>
+            </div>
+          </div>
+          
+          <div className="relay-status small">
+            🌐 {relayCount > 0 ? `Connected to ${relayCount} relay${relayCount !== 1 ? 's' : ''}` : 'Connecting...'}
+          </div>
+        </div>
+        
+        <div className="divider">
+          <span>or play locally</span>
+        </div>
+        
+        {/* Local game section */}
+        <div className="menu-section">
+          <h2>🎮 Local Game</h2>
+          <div className="player-setup">
+            {playerConfigs.map((config, idx) => {
+              const playerNum = idx + 1;
+              const color = getPlayerColor(playerNum);
+              
+              return (
+                <button
+                  key={idx}
+                  className={`player-toggle ${config.type}`}
+                  style={{ color, borderColor: config.type !== 'off' ? color : undefined }}
+                  onClick={() => cyclePlayerType(idx)}
+                >
+                  <span className="icon">
+                    {config.type === 'human' ? '👤' : config.type === 'ai' ? '🤖' : '⭕'}
+                  </span>
+                  <span>P{playerNum}</span>
+                  <span style={{ fontSize: '0.6rem' }}>
+                    {config.type === 'human' ? 'HUMAN' : config.type === 'ai' ? 'AI' : 'OFF'}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          
+          <button className="menu-btn btn-local" onClick={() => { setGameMode('local'); startGame(); }}>
+            ⚡ Start Local Game
+          </button>
+        </div>
+        
+        {gamepads.length > 0 && (
+          <div className={`gamepad-hint connected`}>
+            🎮 {gamepads.length} Controller{gamepads.length > 1 ? 's' : ''} Connected
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Render local game menu
   if (showMenu) {
     return (
       <div className="menu-overlay">
@@ -885,6 +1527,9 @@ export function ChainReactionApp() {
         <div className="menu-buttons">
           <button className="menu-btn btn-start" onClick={startGame}>
             ⚡ Start Game
+          </button>
+          <button className="menu-btn btn-back" onClick={() => { setGameMode('menu'); setShowMenu(true); }}>
+            ← Back
           </button>
         </div>
         
@@ -941,46 +1586,89 @@ export function ChainReactionApp() {
     );
   }
 
+  // Get turn text for online games
+  const getOnlineTurnText = () => {
+    if (!gameState) return '';
+    if (gameState.winner) {
+      const winnerPlayer = onlinePlayers.find(p => p.playerNumber === gameState.winner);
+      return `🏆 ${winnerPlayer?.name?.toUpperCase() || PLAYER_NAMES[gameState.winner]} WINS!`;
+    }
+    if (gameMode === 'online-game') {
+      const currentOnlinePlayer = onlinePlayers[nostrMultiplayer.getCurrentPlayerIndex()];
+      if (nostrMultiplayer.isMyTurn()) {
+        return 'YOUR TURN';
+      }
+      return `${currentOnlinePlayer?.name?.toUpperCase() || 'OPPONENT'}'S TURN`;
+    }
+    return `${PLAYER_NAMES[gameState.currentPlayer]}'S TURN`;
+  };
+
   // Render game
   return (
     <>
       <div className="game-header">
         <div className="player-badges">
-          {gameState?.activePlayers.map(player => {
-            const config = playerConfigs[player - 1];
-            const color = getPlayerColor(player);
-            const isActive = player === gameState.currentPlayer && !gameState.winner;
-            const isEliminated = gameState.movesMade >= gameState.activePlayers.length && 
-              !gameState.grid.some(c => c.owner === player && c.orbs > 0);
-            
-            return (
-              <div
-                key={player}
-                className={`player-badge ${isActive ? 'active' : ''} ${isEliminated ? 'eliminated' : ''}`}
-                style={{ color, borderColor: color }}
-              >
-                {config.type === 'ai' ? '🤖' : '👤'} P{player}
-              </div>
-            );
-          })}
+          {gameMode === 'online-game' ? (
+            // Online game - show player names
+            onlinePlayers.map((player, idx) => {
+              const playerNum = player.playerNumber || (idx + 1);
+              const color = getPlayerColor(playerNum);
+              const isActive = idx === nostrMultiplayer.getCurrentPlayerIndex() && !gameState?.winner;
+              const isEliminated = gameState && gameState.movesMade >= gameState.activePlayers.length && 
+                !gameState.grid.some(c => c.owner === playerNum && c.orbs > 0);
+              const isMe = player.id === nostrMultiplayer.getMyId();
+              
+              return (
+                <div
+                  key={player.id}
+                  className={`player-badge ${isActive ? 'active' : ''} ${isEliminated ? 'eliminated' : ''}`}
+                  style={{ color, borderColor: color }}
+                >
+                  {isMe ? '👤' : '🌐'} {player.name}
+                </div>
+              );
+            })
+          ) : (
+            // Local game - show player numbers
+            gameState?.activePlayers.map(player => {
+              const config = playerConfigs[player - 1];
+              const color = getPlayerColor(player);
+              const isActive = player === gameState.currentPlayer && !gameState.winner;
+              const isEliminated = gameState.movesMade >= gameState.activePlayers.length && 
+                !gameState.grid.some(c => c.owner === player && c.orbs > 0);
+              
+              return (
+                <div
+                  key={player}
+                  className={`player-badge ${isActive ? 'active' : ''} ${isEliminated ? 'eliminated' : ''}`}
+                  style={{ color, borderColor: color }}
+                >
+                  {config.type === 'ai' ? '🤖' : config.type === 'network' ? '🌐' : '👤'} P{player}
+                </div>
+              );
+            })
+          )}
         </div>
         
         <div
-          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''}`}
+          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''} ${gameMode === 'online-game' && nostrMultiplayer.isMyTurn() ? 'my-turn' : ''}`}
           style={{ color: gameState ? getPlayerColor(gameState.winner || gameState.currentPlayer) : '#fff' }}
         >
-          {gameState?.winner
-            ? `🏆 ${PLAYER_NAMES[gameState.winner]} WINS!`
-            : `${PLAYER_NAMES[gameState?.currentPlayer || 1]}'S TURN`
-          }
+          {getOnlineTurnText()}
         </div>
         
         <button
           className="btn"
           style={{ padding: '8px 16px', fontSize: '0.7rem' }}
-          onClick={() => setShowMenu(true)}
+          onClick={() => {
+            if (gameMode === 'online-game') {
+              handleLeaveGame();
+            } else {
+              setShowMenu(true);
+            }
+          }}
         >
-          MENU
+          {gameMode === 'online-game' ? 'LEAVE' : 'MENU'}
         </button>
       </div>
       
@@ -997,9 +1685,15 @@ export function ChainReactionApp() {
           />
         </div>
         
-        {gameState?.winner && (
+        {gameState?.winner && gameMode !== 'online-game' && (
           <button className="btn btn-restart" onClick={restartGame}>
             ⟳ Play Again
+          </button>
+        )}
+        
+        {gameState?.winner && gameMode === 'online-game' && (
+          <button className="btn btn-restart" onClick={handleLeaveGame}>
+            ← Back to Menu
           </button>
         )}
         
@@ -1021,6 +1715,11 @@ export function ChainReactionApp() {
       
       {/* Controller status */}
       <div className="controller-status">
+        {gameMode === 'online-game' && (
+          <div className="controller-badge connected">
+            🌐 Online
+          </div>
+        )}
         {gamepads.map((gp) => (
           <div key={gp.index} className="controller-badge connected">
             🎮 Controller {gp.index + 1}
