@@ -55,7 +55,7 @@ body {
     color: var(--text-primary);
     font-family: 'Rajdhani', 'Segoe UI', sans-serif;
     min-height: 100vh;
-    overflow: hidden;
+    overflow: auto;
     touch-action: none;
 }
 
