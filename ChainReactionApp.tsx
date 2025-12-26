@@ -494,6 +494,14 @@ export function ChainReactionApp() {
     ? gamepads.find(gp => gp.index === currentPlayerConfig.controllerId) 
     : undefined;
 
+  // Helper to check if it's my turn based on GameState (source of truth)
+  // This is more reliable than nostrMultiplayer.isMyTurn() which can get out of sync
+  const isMyTurnFromGameState = useCallback(() => {
+    if (!gameState || gameMode !== 'online-game') return false;
+    const myPlayerNumber = nostrMultiplayer.getMyPlayerNumber();
+    return gameState.currentPlayer === myPlayerNumber;
+  }, [gameState, gameMode]);
+
   // Resize handler
   useEffect(() => {
     const handleResize = () => {
@@ -910,8 +918,8 @@ export function ChainReactionApp() {
     
     // For online games, only allow moves on your turn with debounce
     if (gameMode === 'online-game') {
-      if (!nostrMultiplayer.isMyTurn()) {
-        console.log('[App] Not your turn in online game');
+      if (!isMyTurnFromGameState()) {
+        console.log('[App] Not your turn in online game (gameState.currentPlayer:', gameState?.currentPlayer, ', myPlayerNumber:', nostrMultiplayer.getMyPlayerNumber(), ')');
         return;
       }
       // Debounce to prevent double clicks
@@ -943,8 +951,8 @@ export function ChainReactionApp() {
     
     // For online games, only allow moves on your turn with debounce
     if (gameMode === 'online-game') {
-      if (!nostrMultiplayer.isMyTurn()) {
-        console.log('[App] Not your turn in online game');
+      if (!isMyTurnFromGameState()) {
+        console.log('[App] Not your turn in online game (gameState.currentPlayer:', gameState?.currentPlayer, ', myPlayerNumber:', nostrMultiplayer.getMyPlayerNumber(), ')');
         return;
       }
       // Debounce to prevent double taps
@@ -1594,8 +1602,9 @@ export function ChainReactionApp() {
       return `🏆 ${winnerPlayer?.name?.toUpperCase() || PLAYER_NAMES[gameState.winner]} WINS!`;
     }
     if (gameMode === 'online-game') {
-      const currentOnlinePlayer = onlinePlayers[nostrMultiplayer.getCurrentPlayerIndex()];
-      if (nostrMultiplayer.isMyTurn()) {
+      // Use gameState.currentPlayer as the source of truth for whose turn it is
+      const currentOnlinePlayer = onlinePlayers.find(p => p.playerNumber === gameState.currentPlayer);
+      if (isMyTurnFromGameState()) {
         return 'YOUR TURN';
       }
       return `${currentOnlinePlayer?.name?.toUpperCase() || 'OPPONENT'}'S TURN`;
@@ -1651,7 +1660,7 @@ export function ChainReactionApp() {
         </div>
         
         <div
-          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''} ${gameMode === 'online-game' && nostrMultiplayer.isMyTurn() ? 'my-turn' : ''}`}
+          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''} ${gameMode === 'online-game' && isMyTurnFromGameState() ? 'my-turn' : ''}`}
           style={{ color: gameState ? getPlayerColor(gameState.winner || gameState.currentPlayer) : '#fff' }}
         >
           {getOnlineTurnText()}
