@@ -187,17 +187,38 @@ describe('Game State', () => {
   });
 
   describe('checkWinner', () => {
-    it('should return null during first round', () => {
+    it('should return null when no orbs are on the board', () => {
+      expect(checkWinner(grid, activePlayers, 0)).toBeNull();
+      expect(checkWinner(grid, activePlayers, 2)).toBeNull();
+    });
+
+    it('should not declare winner before all players have moved once', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
       expect(checkWinner(grid, activePlayers, 0)).toBeNull();
       expect(checkWinner(grid, activePlayers, 1)).toBeNull();
     });
 
-    it('should return winner after first round', () => {
+    it('should return winner after first round when only one player has orbs', () => {
       getCell(grid, 0, 0)!.owner = 1;
       getCell(grid, 0, 0)!.orbs = 1;
       expect(checkWinner(grid, activePlayers, 2)).toBe(1);
+    });
+
+    it('should allow accumulating multiple orbs in a cell for the same player', () => {
+      const cell = getCell(grid, 0, 0)!;
+      cell.owner = 1;
+      cell.orbs = 0;
+      cell.orbs += 2; // simulate increased pieces per turn
+      expect(cell.orbs).toBe(2);
+      expect(cell.owner).toBe(1);
+    });
+
+    it('should return null if movesMade is stuck before first round completes', () => {
+      getCell(grid, 0, 0)!.owner = 1;
+      getCell(grid, 0, 0)!.orbs = 1;
+      const winner = checkWinner(grid, activePlayers, 0); // movesMade stuck at 0
+      expect(winner).toBeNull();
     });
 
     it('should return null when multiple alive', () => {

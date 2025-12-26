@@ -117,16 +117,15 @@ export function checkWinner(
   activePlayers: number[],
   movesMade: number
 ): number | null {
+  // Ensure everyone gets at least one move before elimination
   if (movesMade < activePlayers.length) return null;
-  
+
   const alive = getAlivePlayers(grid, activePlayers);
+  if (alive.length === 0) {
+    return null; // No orbs on board yet
+  }
   if (alive.length === 1) {
     return alive[0];
-  }
-  // Edge case: if no one has orbs but game continued, find who made the last move
-  if (alive.length === 0) {
-    // Return first active player as winner (shouldn't normally happen)
-    return activePlayers[0];
   }
   return null;
 }
