@@ -164,6 +164,7 @@ export function ChainReactionApp() {
   // Game state
   const [gameState, setGameState] = useState<GameState | null>(null);
   const gameStateRef = useRef<GameState | null>(null);
+  const myPlayerNumber = nostrMultiplayer.getMyPlayerNumber();
   
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
@@ -623,7 +624,9 @@ export function ChainReactionApp() {
     // For online games, publish the move to network (unless it's a network move we received)
     if (gameMode === 'online-game' && !isNetworkMove) {
       console.log('[App] Publishing local move to network:', r, c, player);
-      nostrMultiplayer.makeMove(r, c);
+      // Turn gating is handled in-app via gameState/currentPlayer.
+      // NostrMultiplayer's internal currentPlayerIndex can drift if a relay drops/replays history.
+      nostrMultiplayer.makeMove(r, c, { skipTurnCheck: true });
     }
     
     setGameState(prev => {
@@ -920,7 +923,7 @@ export function ChainReactionApp() {
     
     // For online games, only allow moves on your turn with debounce
     if (gameMode === 'online-game') {
-      if (!nostrMultiplayer.isMyTurn()) {
+      if (myPlayerNumber !== gameState.currentPlayer) {
         console.log('[App] Not your turn in online game');
         return;
       }
@@ -953,7 +956,7 @@ export function ChainReactionApp() {
     
     // For online games, only allow moves on your turn with debounce
     if (gameMode === 'online-game') {
-      if (!nostrMultiplayer.isMyTurn()) {
+      if (myPlayerNumber !== gameState.currentPlayer) {
         console.log('[App] Not your turn in online game');
         return;
       }
@@ -1604,8 +1607,8 @@ export function ChainReactionApp() {
       return `🏆 ${winnerPlayer?.name?.toUpperCase() || PLAYER_NAMES[gameState.winner]} WINS!`;
     }
     if (gameMode === 'online-game') {
-      const currentOnlinePlayer = onlinePlayers[nostrMultiplayer.getCurrentPlayerIndex()];
-      if (nostrMultiplayer.isMyTurn()) {
+      const currentOnlinePlayer = onlinePlayers.find(p => p.playerNumber === gameState.currentPlayer);
+      if (myPlayerNumber === gameState.currentPlayer) {
         return 'YOUR TURN';
       }
       return `${currentOnlinePlayer?.name?.toUpperCase() || 'OPPONENT'}'S TURN`;
@@ -1623,7 +1626,7 @@ export function ChainReactionApp() {
             onlinePlayers.map((player, idx) => {
               const playerNum = player.playerNumber || (idx + 1);
               const color = getPlayerColor(playerNum);
-              const isActive = idx === nostrMultiplayer.getCurrentPlayerIndex() && !gameState?.winner;
+              const isActive = playerNum === gameState.currentPlayer && !gameState?.winner;
               const isEliminated = gameState && gameState.movesMade >= gameState.activePlayers.length && 
                 !gameState.grid.some(c => c.owner === playerNum && c.orbs > 0);
               const isMe = player.id === nostrMultiplayer.getMyId();
@@ -1661,7 +1664,7 @@ export function ChainReactionApp() {
         </div>
         
         <div
-          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''} ${gameMode === 'online-game' && nostrMultiplayer.isMyTurn() ? 'my-turn' : ''}`}
+          className={`turn-indicator ${gameState?.winner ? 'winner-animation' : ''} ${gameMode === 'online-game' && myPlayerNumber === gameState?.currentPlayer ? 'my-turn' : ''}`}
           style={{ color: gameState ? getPlayerColor(gameState.winner || gameState.currentPlayer) : '#fff' }}
         >
           {getOnlineTurnText()}
